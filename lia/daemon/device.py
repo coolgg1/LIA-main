@@ -1,58 +1,60 @@
-import json
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, List
-from uuid import uuid4
+from enum import Enum
+from typing import Optional
+from datetime import datetime
+from sqlalchemy import Column, String, DateTime, Enum as SQLEnum
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.dialects.sqlite import JSON
+from pydantic import BaseModel, Field
 
+Base = declarative_base()
 
-@dataclass
-class Device:
+class DeviceRole(str, Enum):
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+class DeviceStatus(str, Enum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    UNREGISTERED = "unregistered"
+
+class DeviceOS(str, Enum):
+    LINUX = "linux"
+    MACOS = "macos"
+    WINDOWS = "windows"
+    IOS = "ios"
+    ANDROID = "android"
+
+class Device(Base):
+    """SQLAlchemy ORM model for devices."""
+    __tablename__ = "devices"
+    
+    device_id = Column(String(36), primary_key=True)  # UUID
+    cluster_id = Column(String(36), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    os_type = Column(String(50), nullable=False)  # "linux", "macos", "windows"
+    role = Column(SQLEnum(DeviceRole), nullable=False)
+    status = Column(SQLEnum(DeviceStatus), default=DeviceStatus.OFFLINE)
+    certificate_thumbprint = Column(String(64), nullable=False, unique=True)
+    certificate_pem = Column(String, nullable=False)  # Full cert for agent verification
+    private_key_pem = Column(String, nullable=True)  # Only on primary device
+    last_heartbeat = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now())
+    updated_at = Column(DateTime, default=datetime.now(), onupdate=datetime.now())
+    metadata = Column(JSON, default={})  # OS-specific info, capabilities
+
+class DeviceRequest(BaseModel):
+    """Request model for device registration."""
+    name: str = Field(..., min_length=1, max_length=255)
+    os_type: DeviceOS
+    role: DeviceRole
+
+class DeviceResponse(BaseModel):
+    """Response model for device registration."""
     device_id: str
-    name: str
-    created_at: str
-    status: str = "registered"
-    metadata: Dict[str, Any] | None = None
-
-
-class DeviceRegistry:
-    def __init__(self, storage_path: str):
-        self.storage_path = Path(storage_path)
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _read(self) -> List[Dict[str, Any]]:
-        if not self.storage_path.exists():
-            return []
-        with self.storage_path.open("r", encoding="utf-8") as handle:
-            try:
-                data = json.load(handle)
-            except json.JSONDecodeError:
-                return []
-            return data if isinstance(data, list) else []
-
-    def _write(self, devices: List[Dict[str, Any]]) -> None:
-        with self.storage_path.open("w", encoding="utf-8") as handle:
-            json.dump(devices, handle, indent=2)
-
-    def list_devices(self) -> List[Dict[str, Any]]:
-        return self._read()
-
-    def register_device(self, name: str, metadata: Dict[str, Any] | None = None) -> Device:
-        device_id = str(uuid4())
-        device = Device(
-            device_id=device_id,
-            name=name,
-            created_at=datetime.now(timezone.utc).isoformat(),
-            status="registered",
-            metadata=metadata or {},
-        )
-        devices = self._read()
-        devices.append(asdict(device))
-        self._write(devices)
-        return device
-
-    def get_device(self, device_id: str) -> Device | None:
-        for entry in self._read():
-            if entry.get("device_id") == device_id:
-                return Device(**entry)
-        return None
+    cluster_id: str
+    certificate_pem: str
+    private_key_pem: Optional[str] = None  # Only for requesting device
+    connection_file_url: Optional[str] = None  # Only for primary device
+    
+    class Config:
+        from_attributes = True
