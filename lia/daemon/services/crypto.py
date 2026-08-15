@@ -1,19 +1,15 @@
 ﻿import os
 from datetime import datetime, timedelta
-from typing import Tuple, cast
+from typing import Tuple
 from cryptography import x509
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import NameOID, ExtensionOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import hashlib
 
 class CertificateManager:
     """Generate, sign, and validate mTLS certificates."""
-
-    # Attribute annotations for static type checkers
-    ca_cert: x509.Certificate
-    ca_key: rsa.RSAPrivateKey
     
     def __init__(self, ca_cert_path: str, ca_key_path: str):
         """
@@ -39,13 +35,10 @@ class CertificateManager:
             )
         
         with open(self.ca_key_path, "rb") as f:
-            key = serialization.load_pem_private_key(
+            self.ca_key = serialization.load_pem_private_key(
                 f.read(), password=None, backend=default_backend()
             )
-            # The loaded key is typed broadly by the library; narrow it to RSA
-            # because this application generates and expects RSA CA keys.
-            self.ca_key: rsa.RSAPrivateKey = cast(rsa.RSAPrivateKey, key)
-
+    
     @staticmethod
     def generate_root_ca(
         common_name: str = "Lia Root CA",
@@ -82,9 +75,9 @@ class CertificateManager:
         ).serial_number(
             x509.random_serial_number()
         ).not_valid_before(
-            datetime.now()
+            datetime.utcnow()
         ).not_valid_after(
-            datetime.now() + timedelta(days=valid_days)
+            datetime.utcnow() + timedelta(days=valid_days)
         ).add_extension(
             x509.BasicConstraints(ca=True, path_length=None),
             critical=True,
@@ -147,9 +140,9 @@ class CertificateManager:
         ).serial_number(
             x509.random_serial_number()
         ).not_valid_before(
-            datetime.now()
+            datetime.utcnow()
         ).not_valid_after(
-            datetime.now() + timedelta(days=valid_days)
+            datetime.utcnow() + timedelta(days=valid_days)
         ).add_extension(
             x509.SubjectAlternativeName([
                 x509.RFC822Name(f"{device_name}@lia.local"),
@@ -225,28 +218,13 @@ class CertificateManager:
             cert = x509.load_pem_x509_certificate(
                 cert_pem.encode("utf-8"), default_backend()
             )
-            # Verify signature was made with CA's public key.
-            # Narrow the public key to RSA for static type checkers and at runtime
-            # only support RSA-signed certificates here.
-            pubkey = self.ca_cert.public_key()
-            if isinstance(pubkey, rsa.RSAPublicKey):
-                # The isinstance check narrows the type for static type checkers —
-                # no explicit cast is necessary.
-                algo = cert.signature_hash_algorithm
-                if algo is None:
-                    # Unknown signature algorithm; unsupported for verification here.
-                    return False
-                pubkey.verify(
-                    cert.signature,
-                    cert.tbs_certificate_bytes,
-                    padding.PKCS1v15(),
-                    algo,
-                )
-            else:
-                # For now only RSA-signed certificates are supported by this
-                # verifier; return False for other key types.
-                return False
+            # Verify signature was made with CA's public key
+            self.ca_cert.public_key().verify(
+                cert.signature,
+                cert.tbs_certificate_bytes,
+                padding.PKCS1v15(),
+                cert.signature_hash_algorithm,
+            )
             return True
         except Exception:
             return False
-

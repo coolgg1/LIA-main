@@ -1,45 +1,47 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from daemon.database import init_db
+from daemon.api.routes import router
+from daemon.config import get_settings
+import logging
 
-from daemon.config import settings
-from daemon.device import DeviceRegistry
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
 
-app = FastAPI(title=settings.app_name)
-registry = DeviceRegistry(settings.device_registry_path)
+# Initialize database
+init_db()
 
+# Create FastAPI app
+app = FastAPI(
+    title="Lia Daemon",
+    description="Device management and orchestration control plane",
+    version="0.1.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # UI development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(router)
 
 @app.get("/health")
-def health() -> dict:
-    return {"status": "ok", "service": settings.app_name, "port": settings.port}
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
 
-
-@app.get("/devices")
-def list_devices() -> list:
-    return registry.list_devices()
-
-
-@app.post("/devices/register")
-def register_device(payload: dict) -> dict:
-    name = payload.get("name")
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
-    device = registry.register_device(name=name, metadata=payload.get("metadata", {}))
-    return {
-        "device_id": device.device_id,
-        "name": device.name,
-        "status": device.status,
-        "created_at": device.created_at,
-    }
-
-
-@app.get("/devices/{device_id}")
-def get_device(device_id: str) -> dict:
-    device = registry.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="device not found")
-    return {
-        "device_id": device.device_id,
-        "name": device.name,
-        "status": device.status,
-        "created_at": device.created_at,
-        "metadata": device.metadata,
-    }
+@app.on_event("startup")
+async def startup():
+    """Startup tasks."""
+    logger.info("Lia daemon starting...")
+    settings = get_settings()
+    logger.info(f"Listening on {settings.daemon_host}:{settings.daemon_port}")
