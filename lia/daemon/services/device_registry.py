@@ -1,10 +1,12 @@
-from typing import Optional, List
-from uuid import UUID, uuid4
+from typing import Optional, List, Tuple, cast
+from uuid import uuid4
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from daemon.models.device import Device, DeviceRole, DeviceStatus, DeviceRequest
+from daemon.models.device import Device, DeviceRole, DeviceStatus
 from daemon.services.crypto import CertificateManager
+from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 class DeviceRegistry:
     """CRUD operations for device registry."""
@@ -38,11 +40,11 @@ class DeviceRegistry:
         device_id = str(uuid4())
         
         # Generate certificate
-        cert, private_key = self.cert_manager.generate_device_certificate(
+        cert, private_key = cast(Tuple[x509.Certificate, rsa.RSAPrivateKey], self.cert_manager.generate_device_certificate(
             device_id=device_id,
             device_name=name,
             common_name=f"{name} (primary)",
-        )
+        ))
         
         cert_pem = CertificateManager.certificate_to_pem(cert)
         key_pem = CertificateManager.private_key_to_pem(private_key)
@@ -97,11 +99,11 @@ class DeviceRegistry:
         device_id = str(uuid4())
         
         # Generate certificate (no private key stored on primary)
-        cert, private_key = self.cert_manager.generate_device_certificate(
+        cert, _ = cast(Tuple[x509.Certificate, rsa.RSAPrivateKey], self.cert_manager.generate_device_certificate(
             device_id=device_id,
             device_name=name,
             common_name=f"{name} (secondary)",
-        )
+        ))
         
         cert_pem = CertificateManager.certificate_to_pem(cert)
         thumbprint = CertificateManager.get_certificate_thumbprint(cert_pem)
@@ -148,8 +150,8 @@ class DeviceRegistry:
         """Update device status and heartbeat timestamp."""
         device = self.get_device_by_id(device_id)
         if device:
-            device.status = status
-            device.last_heartbeat = datetime.utcnow()
+            device.status = status.value
+            device.last_heartbeat = datetime.now()
             self.db.commit()
             self.db.refresh(device)
         return device
